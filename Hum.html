@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family:Arial; padding:20px;">
+
+<h2>20–100 Hz Sweep Generator</h2>
+
+<button onclick="start()">Start Sweep</button>
+<button onclick="stop()">Stop</button>
+
+<p>
+    <label>Sweep Speed (seconds up + seconds down):</label><br>
+    <input type="range" id="speed" min="2" max="20" value="8" step="0.1" oninput="updateLabels()"> 
+    <span id="speedLabel">8 s</span>
+</p>
+
+<p>
+    <label>Base Volume:</label><br>
+    <input type="range" id="volume" min="0" max="1" value="0.2" step="0.01" oninput="updateVolume()"> 
+    <span id="volumeLabel">20%</span>
+</p>
+
+<p>
+    <label>Volume Slope (tilt low → high, dB):</label><br>
+    <input type="range" id="tilt" min="-24" max="24" value="0" step="0.5" oninput="updateTilt()"> 
+    <span id="tiltLabel">0 dB (flat)</span>
+</p>
+
+<h3>Current Frequency: <span id="freqOut">-- Hz</span></h3>
+
+<script>
+let ctx, osc, gainNode;
+let sweepInterval;
+let minFreq = 20;
+let maxFreq = 25;
+
+function start() {
+    if (ctx) return; // prevent double-start
+
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    osc = ctx.createOscillator();
+    gainNode = ctx.createGain();
+
+    osc.type = "sine";
+    gainNode.gain.value = document.getElementById("volume").value;
+
+    osc.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    osc.start();
+
+    runSweep();
+}
+
+function stop() {
+    if (!ctx) return;
+    clearInterval(sweepInterval);
+    osc.stop();
+    ctx.close();
+
+    ctx = null;
+    osc = null;
+    gainNode = null;
+
+    document.getElementById("freqOut").innerText = "-- Hz";
+}
+
+function runSweep() {
+    const speed = parseFloat(document.getElementById("speed").value);
+    const halfSweep = speed / 2;
+
+    function sweep() {
+        let now = ctx.currentTime;
+
+        // Reset scheduling
+        osc.frequency.cancelScheduledValues(now);
+
+        // Up sweep: 20 → 100
+        osc.frequency.setValueAtTime(minFreq, now);
+        osc.frequency.linearRampToValueAtTime(maxFreq, now + halfSweep);
+
+        // Down sweep: 100 → 20
+        osc.frequency.linearRampToValueAtTime(minFreq, now + speed);
+    }
+
+    sweep(); // run immediately
+
+    sweepInterval = setInterval(sweep, speed * 1000);
+
+    // Live frequency & gain updater
+    function updateDisplay() {
+        if (!osc || !gainNode) return;
+
+        const freq = osc.frequency.value;
+        document.getElementById("freqOut").innerText = freq.toFixed(1) + " Hz";
+
+        // Update gain according to base volume + tilt slope
+        const gain = computeTiltedGain(freq);
+        gainNode.gain.value = gain;
+
+        requestAnimationFrame(updateDisplay);
+    }
+    updateDisplay();
+}
+
+// Compute gain with tilt / slope across the sweep range
+function computeTiltedGain(freq) {
+    const baseVol = parseFloat(document.getElementById("volume").value); // 0–1
+    const slopeDb = parseFloat(document.getElementById("tilt").value);   // -24..24
+
+    if (baseVol === 0) return 0;
+
+    // Normalise: low freq -> t = 1, high freq -> t = 0
+    let t = (maxFreq - freq) / (maxFreq - minFreq);
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+
+    // dB tilt: at low freq -> +slopeDb, at high freq -> 0 dB
+    const db = slopeDb * t;
+
+    // Convert dB to linear
+    const lin = Math.pow(10, db / 20);
+
+    return baseVol * lin;
+}
+
+function updateLabels() {
+    const speed = document.getElementById("speed").value;
+    document.getElementById("speedLabel").innerText = speed + " s";
+}
+
+function updateVolume() {
+    const vol = document.getElementById("volume").value;
+    document.getElementById("volumeLabel").innerText =
+        Math.round(vol * 100) + "%";
+}
+
+function updateTilt() {
+    const tilt = parseFloat(document.getElementById("tilt").value);
+    let desc = "flat";
+    if (tilt > 0) desc = "lows boosted";
+    if (tilt < 0) desc = "highs boosted";
+
+    document.getElementById("tiltLabel").innerText =
+        tilt.toFixed(1) + " dB (" + desc + ")";
+}
+</script>
+
+</body>
+</html>
